@@ -1321,6 +1321,42 @@ static bool bgp_cluster_filter(struct peer *peer, struct attr *attr)
 	return false;
 }
 
+static bool bgp_otc_filter(struct peer *peer, struct attr *attr)
+{
+	if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_OTC)) {
+		if (peer->local_role == ROLE_PROVIDER || peer->local_role == ROLE_RS_SERVER)
+			return true;
+		if (peer->local_role == ROLE_PEER && attr->otc != peer->as)
+			return true;
+		return false;
+	}
+	if (peer->local_role == ROLE_CUSTOMER ||
+			peer->local_role == ROLE_PEER ||
+			peer->local_role == ROLE_RS_CLIENT) {
+		attr->flag |= ATTR_FLAG_BIT(BGP_ATTR_OTC);
+		attr->otc = peer->as;
+	}
+	return false;
+}
+
+static bool bgp_otc_egress(struct peer *peer, struct attr *attr)
+{
+	if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_OTC)) {
+		if (peer->local_role == ROLE_CUSTOMER ||
+				peer->local_role == ROLE_RS_CLIENT ||
+				peer->local_role == ROLE_PEER)
+			return true;
+		return false;
+	}
+	if (peer->local_role == ROLE_PROVIDER ||
+			peer->local_role == ROLE_PEER ||
+			peer->local_role == ROLE_RS_SERVER) {
+		attr->flag |= ATTR_FLAG_BIT(BGP_ATTR_OTC);
+		attr->otc = peer->bgp->as;
+	}
+	return false;
+}
+
 static int bgp_input_modifier(struct peer *peer, const struct prefix *p,
 			      struct attr *attr, afi_t afi, safi_t safi,
 			      const char *rmap_name, mpls_label_t *label,
@@ -1866,6 +1902,11 @@ bool subgroup_announce_check(struct bgp_node *rn, struct bgp_path_info *pi,
 		if (!(CHECK_FLAG(peer->af_flags[afi][safi],
 				 PEER_FLAG_NEXTHOP_LOCAL_UNCHANGED)))
 			memset(&attr->mp_nexthop_local, 0, IPV6_MAX_BYTELEN);
+	}
+
+	if (bgp_otc_egress(peer, attr)) {
+		bgp_attr_flush(attr);
+		return false;
 	}
 
 	bgp_peer_remove_private_as(bgp, afi, safi, peer, attr);
@@ -3498,6 +3539,12 @@ int bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 	if (bgp_mac_entry_exists(p) || bgp_mac_exist(&attr->rmac)) {
 		peer->stat_pfx_nh_invalid++;
 		reason = "self mac;";
+		goto filtered;
+	}
+
+	if (bgp_otc_filter(peer, &new_attr)) {
+		reason = "failing otc validation";
+		bgp_attr_flush(&new_attr);
 		goto filtered;
 	}
 
@@ -9189,6 +9236,13 @@ void route_vty_out_detail(struct vty *vty, struct bgp *bgp,
 						     "atomicAggregate");
 		else
 			vty_out(vty, ", atomic-aggregate");
+	}
+
+	if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_OTC)) {
+		if (json_paths)
+			json_object_int_add(json_path, "otc", attr->otc);
+		else
+			vty_out(vty, ", otc %u", attr->otc);
 	}
 
 	if (CHECK_FLAG(path->flags, BGP_PATH_MULTIPATH)

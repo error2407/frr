@@ -79,6 +79,7 @@ static const struct message attr_str[] = {
 	{BGP_ATTR_AS_PATHLIMIT, "AS_PATHLIMIT"},
 	{BGP_ATTR_PMSI_TUNNEL, "PMSI_TUNNEL_ATTRIBUTE"},
 	{BGP_ATTR_ENCAP, "ENCAP"},
+	{BGP_ATTR_OTC, "OTC"},
 #ifdef ENABLE_BGP_VNC_ATTR
 	{BGP_ATTR_VNC, "VNC"},
 #endif
@@ -677,6 +678,7 @@ unsigned int attrhash_key_make(const void *p)
 	key = jhash(attr->mp_nexthop_local.s6_addr, IPV6_MAX_BYTELEN, key);
 	MIX3(attr->nh_ifindex, attr->nh_lla_ifindex, attr->distance);
 	MIX(attr->rmap_table_id);
+	MIX(attr->otc);
 
 	return key;
 }
@@ -722,7 +724,8 @@ bool attrhash_cmp(const void *p1, const void *p2)
 		    && attr1->nh_lla_ifindex == attr2->nh_lla_ifindex
 		    && attr1->distance == attr2->distance
 		    && srv6_l3vpn_same(attr1->srv6_l3vpn, attr2->srv6_l3vpn)
-		    && srv6_vpn_same(attr1->srv6_vpn, attr2->srv6_vpn))
+		    && srv6_vpn_same(attr1->srv6_vpn, attr2->srv6_vpn)
+		    && attr1->otc == attr2->otc)
 			return true;
 	}
 
@@ -1275,6 +1278,7 @@ const uint8_t attr_flags_values[] = {
 	[BGP_ATTR_PMSI_TUNNEL] = BGP_ATTR_FLAG_OPTIONAL | BGP_ATTR_FLAG_TRANS,
 	[BGP_ATTR_LARGE_COMMUNITIES] =
 		BGP_ATTR_FLAG_OPTIONAL | BGP_ATTR_FLAG_TRANS,
+	[BGP_ATTR_OTC] = BGP_ATTR_FLAG_OPTIONAL | BGP_ATTR_FLAG_TRANS,
 	[BGP_ATTR_PREFIX_SID] = BGP_ATTR_FLAG_OPTIONAL | BGP_ATTR_FLAG_TRANS,
 };
 static const size_t attr_flags_values_max = array_size(attr_flags_values) - 1;
@@ -2738,6 +2742,28 @@ bgp_attr_pmsi_tunnel(struct bgp_attr_parser_args *args)
 	return BGP_ATTR_PARSE_PROCEED;
 }
 
+/* OTC attribute. */
+static bgp_attr_parse_ret_t bgp_attr_otc(struct bgp_attr_parser_args *args)
+{
+	struct peer *const peer = args->peer;
+	struct attr *const attr = args->attr;
+	const bgp_size_t length = args->length;
+
+	/* Length check. */
+	if (length != 4) {
+		flog_err(EC_BGP_ATTR_LEN,
+			 "OTC attribute length isn't 4 [%u]", length);
+		return bgp_attr_malformed(args, BGP_NOTIFY_UPDATE_ATTR_LENG_ERR,
+					  args->total);
+	}
+
+	attr->otc = stream_getl(peer->curr);
+
+	attr->flag |= ATTR_FLAG_BIT(BGP_ATTR_OTC);
+
+	return BGP_ATTR_PARSE_PROCEED;
+}
+
 /* BGP unknown attribute treatment. */
 static bgp_attr_parse_ret_t bgp_attr_unknown(struct bgp_attr_parser_args *args)
 {
@@ -3082,6 +3108,9 @@ bgp_attr_parse_ret_t bgp_attr_parse(struct peer *peer, struct attr *attr,
 			break;
 		case BGP_ATTR_PMSI_TUNNEL:
 			ret = bgp_attr_pmsi_tunnel(&attr_args);
+			break;
+		case BGP_ATTR_OTC:
+			ret = bgp_attr_otc(&attr_args);
 			break;
 		default:
 			ret = bgp_attr_unknown(&attr_args);
@@ -4058,6 +4087,14 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 		// Unicast tunnel endpoint IP address
 	}
 
+	/* OTC */
+	if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_OTC)) {
+		stream_putc(s, BGP_ATTR_FLAG_OPTIONAL | BGP_ATTR_FLAG_TRANS);
+		stream_putc(s, BGP_ATTR_OTC);
+		stream_putc(s, 4);
+		stream_putl(s, attr->otc);
+	}
+
 	/* Unknown transit attribute. */
 	if (attr->transit)
 		stream_put(s, attr->transit->val, attr->transit->length);
@@ -4296,6 +4333,14 @@ void bgp_dump_routes_attr(struct stream *s, struct attr *attr,
 			stream_putw(s, 0); // flags
 			stream_putl(s, attr->label_index);
 		}
+	}
+
+	/* OTC */
+	if (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_OTC)) {
+		stream_putc(s, BGP_ATTR_FLAG_OPTIONAL | BGP_ATTR_FLAG_TRANS);
+		stream_putc(s, BGP_ATTR_OTC);
+		stream_putc(s, 4);
+		stream_putl(s, attr->otc);
 	}
 
 	/* Return total size of attribute. */

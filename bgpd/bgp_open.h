@@ -53,6 +53,7 @@ struct graceful_restart_af {
 #define CAPABILITY_CODE_ENHE            5 /* Extended Next Hop Encoding */
 #define CAPABILITY_CODE_REFRESH_OLD   128 /* Route Refresh Capability(cisco) */
 #define CAPABILITY_CODE_ORF_OLD       130 /* Cooperative Route Filtering Capability(cisco) */
+#define CAPABILITY_CODE_ROLE            9 /* Role Capability */
 
 /* Capability Length */
 #define CAPABILITY_CODE_MP_LEN          4
@@ -64,6 +65,7 @@ struct graceful_restart_af {
 #define CAPABILITY_CODE_ENHE_LEN        6 /* NRLI AFI = 2, SAFI = 2, Nexthop AFI = 2 */
 #define CAPABILITY_CODE_MIN_FQDN_LEN    2
 #define CAPABILITY_CODE_ORF_LEN         5
+#define CAPABILITY_CODE_ROLE_LEN        1
 
 /* Cooperative Route Filtering Capability.  */
 
@@ -89,5 +91,6 @@ extern void bgp_open_capability(struct stream *, struct peer *);
 extern void bgp_capability_vty_out(struct vty *vty, struct peer *peer,
 				   bool use_json, json_object *json_neigh);
 extern as_t peek_for_as4_capability(struct peer *, uint8_t);
+extern int bgp_role_validation(struct peer *);
 
 #endif /* _QUAGGA_BGP_OPEN_H */

@@ -441,6 +441,9 @@ struct cmd_node {
 #define GR_NEIGHBOR_HELPER_CMD "Graceful Restart Helper command for a neighbor\n"
 #define NO_GR_NEIGHBOR_HELPER_CMD "Undo Graceful Restart Helper command for a neighbor\n"
 
+/* Describing roles */
+#define ROLE_STR "Providing transit\nRoute server\nRS client\nUsing transit\nPublic/private peering\n"
+
 /* Prototypes. */
 extern void install_node(struct cmd_node *node);
 extern void install_default(enum node_type);

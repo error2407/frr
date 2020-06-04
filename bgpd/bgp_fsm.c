@@ -235,6 +235,7 @@ static struct peer *peer_xfer_conn(struct peer *from_peer)
 	peer->v_routeadv = from_peer->v_routeadv;
 	peer->v_gr_restart = from_peer->v_gr_restart;
 	peer->cap = from_peer->cap;
+	peer->neighbor_role = from_peer->neighbor_role;
 	status = peer->status;
 	pstatus = peer->ostatus;
 	last_evt = peer->last_event;
@@ -1302,6 +1303,9 @@ int bgp_stop(struct peer *peer)
 		close(peer->fd);
 		peer->fd = -1;
 	}
+
+	/* Resetting neighbor role to the default value */
+	peer->neighbor_role = ROLE_UNDEFINE;
 
 	FOREACH_AFI_SAFI (afi, safi) {
 		/* Reset all negotiated variables */

@@ -253,6 +253,9 @@ struct attr {
 
 	/* Link bandwidth value, if any. */
 	uint32_t link_bw;
+
+	/* OTC value if set */
+	uint32_t otc;
 };
 
 /* rmap_change_flags definition */

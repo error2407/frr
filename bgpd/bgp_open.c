@@ -756,6 +756,21 @@ static int bgp_capability_hostname(struct peer *peer,
 	return 0;
 }
 
+static int bgp_capability_role(struct peer *peer, struct capability_header *hdr)
+{
+	SET_FLAG(peer->cap, PEER_CAP_ROLE_RCV);
+	if (hdr->length != CAPABILITY_CODE_ROLE_LEN) {
+		flog_warn(
+			EC_BGP_CAPABILITY_INVALID_LENGTH,
+			"Role: Received invalid length %d",
+			hdr->length);
+		return -1;
+	}
+	uint8_t role = stream_getc(BGP_INPUT(peer));
+	peer->neighbor_role = role;
+	return 0;
+}
+
 static const struct message capcode_str[] = {
 	{CAPABILITY_CODE_MP, "MultiProtocol Extensions"},
 	{CAPABILITY_CODE_REFRESH, "Route Refresh"},
@@ -769,6 +784,7 @@ static const struct message capcode_str[] = {
 	{CAPABILITY_CODE_REFRESH_OLD, "Route Refresh (Old)"},
 	{CAPABILITY_CODE_ORF_OLD, "ORF (Old)"},
 	{CAPABILITY_CODE_FQDN, "FQDN"},
+	{CAPABILITY_CODE_ROLE, "Role"},
 	{0}};
 
 /* Minimum sizes for length field of each cap (so not inc. the header) */
@@ -785,6 +801,7 @@ static const size_t cap_minsizes[] = {
 		[CAPABILITY_CODE_REFRESH_OLD] = CAPABILITY_CODE_REFRESH_LEN,
 		[CAPABILITY_CODE_ORF_OLD] = CAPABILITY_CODE_ORF_LEN,
 		[CAPABILITY_CODE_FQDN] = CAPABILITY_CODE_MIN_FQDN_LEN,
+		[CAPABILITY_CODE_ROLE] = CAPABILITY_CODE_ROLE_LEN,
 };
 
 /* value the capability must be a multiple of.
@@ -805,6 +822,7 @@ static const size_t cap_modsizes[] = {
 		[CAPABILITY_CODE_REFRESH_OLD] = 1,
 		[CAPABILITY_CODE_ORF_OLD] = 1,
 		[CAPABILITY_CODE_FQDN] = 1,
+		[CAPABILITY_CODE_ROLE] = 1,
 };
 
 /**
@@ -872,6 +890,7 @@ static int bgp_capability_parse(struct peer *peer, size_t length,
 		case CAPABILITY_CODE_DYNAMIC_OLD:
 		case CAPABILITY_CODE_ENHE:
 		case CAPABILITY_CODE_FQDN:
+		case CAPABILITY_CODE_ROLE:
 			/* Check length. */
 			if (caphdr.length < cap_minsizes[caphdr.code]) {
 				zlog_info(
@@ -962,6 +981,9 @@ static int bgp_capability_parse(struct peer *peer, size_t length,
 		case CAPABILITY_CODE_FQDN:
 			ret = bgp_capability_hostname(peer, &caphdr);
 			break;
+		case CAPABILITY_CODE_ROLE:
+			ret = bgp_capability_role(peer, &caphdr);
+			break;
 		default:
 			if (caphdr.code > 128) {
 				/* We don't send Notification for unknown vendor
@@ -1023,6 +1045,40 @@ static bool strict_capability_same(struct peer *peer)
 				return false;
 	return true;
 }
+
+
+int bgp_role_validation(struct peer *peer)
+{
+	uint8_t local_role = peer->local_role;
+	uint8_t neigh_role = peer->neighbor_role;
+	if (local_role != ROLE_UNDEFINE && neigh_role != ROLE_UNDEFINE
+		&& neigh_role < ROLE_MAX
+			&& !((local_role == ROLE_PEER
+				&& neigh_role == ROLE_PEER)
+			|| (local_role == ROLE_PROVIDER
+				&& neigh_role == ROLE_CUSTOMER)
+			|| (local_role == ROLE_CUSTOMER
+				&& neigh_role == ROLE_PROVIDER)
+			|| (local_role == ROLE_RS_SERVER
+				&& neigh_role == ROLE_RS_CLIENT)
+			|| (local_role == ROLE_RS_CLIENT
+				&& neigh_role == ROLE_RS_SERVER))) {
+		bgp_notify_send(peer, BGP_NOTIFY_OPEN_ERR,
+			BGP_NOTIFY_OPEN_ROLE_MISMATCH);
+		return -1;
+	}
+	if (neigh_role == ROLE_UNDEFINE
+			&& CHECK_FLAG(peer->flags, PEER_FLAG_STRICT_MODE)) {
+		char *err_msg =
+			"We are using strict mode. Please set role on your side.";
+		bgp_notify_send_with_data(peer, BGP_NOTIFY_CEASE,
+					BGP_NOTIFY_CEASE_ADMIN_RESET, err_msg,
+					strlen(err_msg));
+		return -1;
+	}
+	return 1;
+}
+
 
 /* peek into option, stores ASN to *as4 if the AS4 capability was found.
  * Returns  0 if no as4 found, as4cap value otherwise.
@@ -1192,6 +1248,10 @@ int bgp_open_option_parse(struct peer *peer, uint8_t length, int *mp_capability)
 			return -1;
 		}
 	}
+
+	/* Check that roles are corresponding to each other */
+	if (bgp_role_validation(peer) == -1)
+		return -1;
 
 	/* Check there are no common AFI/SAFIs and send Unsupported Capability
 	   error. */
@@ -1471,6 +1531,16 @@ void bgp_open_capability(struct stream *s, struct peer *peer)
 	else
 		local_as = peer->local_as;
 	stream_putl(s, local_as);
+
+	/* Role*/
+	if (peer->local_role != ROLE_UNDEFINE) {
+		SET_FLAG(peer->cap, PEER_CAP_ROLE_ADV);
+		stream_putc(s, BGP_OPEN_OPT_CAP);
+		stream_putc(s, CAPABILITY_CODE_ROLE_LEN + 2);
+		stream_putc(s, CAPABILITY_CODE_ROLE);
+		stream_putc(s, CAPABILITY_CODE_ROLE_LEN);
+		stream_putc(s, peer->local_role);
+	}
 
 	/* AddPath */
 	FOREACH_AFI_SAFI (afi, safi) {
